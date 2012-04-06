@@ -2537,11 +2537,13 @@ class Model(object):
 
         for related_name, rel_model in cls._meta.reverse_relations.items():
             rel_field = cls._meta.get_field_for_related_name(rel_model, related_name)
-            coll = [(rel_model, rel_field.name, rel_field.null)] + accum
-            if not rel_field.null:
-                models.extend(rel_model.collect_models(coll))
+            group = (rel_model, rel_field.name, rel_field.null)
+            if group not in accum:
+                coll = [group] + accum
+                if not rel_field.null:
+                    models.extend(rel_model.collect_models(coll))
 
-            models.append(coll)
+                models.append(coll)
         return models
 
     def collect_queries(self):
