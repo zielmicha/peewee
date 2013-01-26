@@ -22,7 +22,7 @@ __all__ = [
     'DecimalField', 'CharField', 'TextField', 'DateTimeField', 'DateField', 'TimeField',
     'BooleanField', 'ForeignKeyField', 'Model', 'DoesNotExist', 'ImproperlyConfigured',
     'DQ', 'fn', 'SqliteDatabase', 'MySQLDatabase', 'PostgresqlDatabase', 'Field',
-    'JOIN_LEFT_OUTER', 'JOIN_INNER', 'JOIN_FULL',
+    'JOIN_LEFT_OUTER', 'JOIN_INNER', 'JOIN_FULL', 'C', 'Q',
 ]
 
 try:
@@ -210,8 +210,28 @@ class Func(Leaf):
         def dec(*args, **kwargs):
             return Func(attr, *args, **kwargs)
         return dec
-
 fn = Func(None)
+
+class Clause(object):
+    def __init__(self, _name, *params):
+        self._name = _name
+        self.params = params
+
+    def __getattr__(self, attr):
+        return Clause(attr)
+
+    def __call__(self, *args):
+        self.params = args
+        return self
+C = Clause('')
+
+class QuotedName(object):
+    def __init__(self, _name):
+        self._name = _name
+
+    def __getattr__(self, attr):
+        return QuotedName(attr)
+Q = QuotedName(None)
 
 
 class FieldDescriptor(object):
@@ -255,6 +275,9 @@ class Field(Leaf):
         self._order = Field._field_counter
 
         super(Field, self).__init__()
+
+    def ddl(self):
+        return QuotedName(self.name)
 
     def add_to_class(self, model_class, name):
         self.name = name
@@ -828,6 +851,22 @@ class QueryCompiler(object):
             params.extend(w_params)
 
         return ' '.join(parts), params
+
+    def parse_ddl(self, clause):
+        if isinstance(clause, Clause):
+            if clause.params:
+                params = map(self.parse_ddl, clause.params)
+                return '%s(%s)' % (clause._name, ', '.join(params))
+            else:
+                return clause._name
+        elif isinstance(clause, QuotedName):
+            return self.quote(clause._name)
+        elif isinstance(clause, (list, tuple)):
+            return self.parse_ddl_list(*clause)
+        return str(clause)
+
+    def parse_ddl_list(self, *ddl):
+        return ' '.join(map(self.parse_ddl, ddl))
 
     def field_sql(self, field):
         attrs = field.attributes
