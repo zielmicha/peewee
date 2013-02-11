@@ -7,7 +7,7 @@
 #      ///'
 #     //
 #    '
-from __future__ import with_statement
+
 import datetime
 import decimal
 import logging
@@ -16,6 +16,8 @@ import re
 import threading
 from collections import deque, namedtuple
 from copy import deepcopy
+import collections
+from functools import reduce
 
 __all__ = [
     'IntegerField', 'BigIntegerField', 'PrimaryKeyField', 'FloatField', 'DoubleField',
@@ -335,14 +337,14 @@ class DecimalField(Field):
             return decimal.Decimal(str(value))
 
 def format_unicode(s, encoding='utf-8'):
-    if isinstance(s, unicode):
+    if isinstance(s, str):
         return s
-    elif isinstance(s, basestring):
+    elif isinstance(s, str):
         return s.decode(encoding)
     elif hasattr(s, '__unicode__'):
         return s.__unicode__()
     else:
-        return unicode(bytes(s), encoding)
+        return str(bytes(s), encoding)
 
 class CharField(Field):
     db_field = 'string'
@@ -383,7 +385,7 @@ class DateTimeField(Field):
         }
 
     def python_value(self, value):
-        if value and isinstance(value, basestring):
+        if value and isinstance(value, str):
             return format_date_time(value, self.attributes['formats'])
         return value
 
@@ -400,7 +402,7 @@ class DateField(Field):
         }
 
     def python_value(self, value):
-        if value and isinstance(value, basestring):
+        if value and isinstance(value, str):
             pp = lambda x: x.date()
             return format_date_time(value, self.attributes['formats'], pp)
         elif value and isinstance(value, datetime.datetime):
@@ -422,7 +424,7 @@ class TimeField(Field):
         }
 
     def python_value(self, value):
-        if value and isinstance(value, basestring):
+        if value and isinstance(value, str):
             pp = lambda x: x.time()
             return format_date_time(value, self.attributes['formats'], pp)
         elif value and isinstance(value, datetime.datetime):
@@ -589,7 +591,7 @@ class QueryCompiler(object):
     def _max_alias(self, am):
         max_alias = 0
         if am:
-            for a in am.values():
+            for a in list(am.values()):
                 i = int(a.lstrip('t'))
                 if i > max_alias:
                     max_alias = i
@@ -667,7 +669,7 @@ class QueryCompiler(object):
 
     def parse_field_dict(self, d):
         sets, params = [], []
-        for field, expr in d.items():
+        for field, expr in list(d.items()):
             field_str, _ = self.parse_expr(field)
             # because we don't know whether to call db_value or parse_expr first,
             # we'd prefer to call parse_expr since its more general, but it does
@@ -690,7 +692,7 @@ class QueryCompiler(object):
 
     def calculate_alias_map(self, query, start=1):
         alias_map = {query.model_class: 't%s' % start}
-        for model, joins in query._joins.items():
+        for model, joins in list(query._joins.items()):
             if model not in alias_map:
                 start += 1
                 alias_map[model] = 't%s' % start
@@ -1009,7 +1011,7 @@ class QueryResultWrapper(object):
         while 1:
             yield self.iterate()
 
-    def next(self):
+    def __next__(self):
         if self.__idx < self.__ct:
             inst = self._result_cache[self.__idx]
             self.__idx += 1
@@ -1027,7 +1029,7 @@ class QueryResultWrapper(object):
         self.__idx = self.__ct
         while not self._populated and (n > self.__ct):
             try:
-                self.next()
+                next(self)
             except StopIteration:
                 break
 
@@ -1077,7 +1079,7 @@ class Query(Leaf):
 
     def clone_joins(self):
         return dict(
-            (mc, list(j)) for mc, j in self._joins.items()
+            (mc, list(j)) for mc, j in list(self._joins.items())
         )
 
     @returns_clone
@@ -1094,7 +1096,7 @@ class Query(Leaf):
             raise ValueError('No foreign key between %s and %s' % (
                 self._query_ctx, model_class,
             ))
-        if on and isinstance(on, basestring):
+        if on and isinstance(on, str):
             on = self._query_ctx._meta.fields[on]
         self._joins.setdefault(self._query_ctx, [])
         self._joins[self._query_ctx].append(Join(model_class, join_type, on))
@@ -1348,7 +1350,7 @@ class SelectQuery(Query):
     def get(self):
         clone = self.paginate(1, 1)
         try:
-            return clone.execute().next()
+            return next(clone.execute())
         except StopIteration:
             raise self.model_class.DoesNotExist('instance matching query does not exist:\nSQL: %s\nPARAMS: %s' % (
                 self.sql()
@@ -1427,7 +1429,7 @@ class UpdateQuery(Query):
 class InsertQuery(Query):
     def __init__(self, model_class, insert=None):
         mm = model_class._meta
-        query = dict((mm.fields[f], v) for f, v in mm.get_default_dict().items())
+        query = dict((mm.fields[f], v) for f, v in list(mm.get_default_dict().items()))
         query.update(insert)
         self._insert = query
         super(InsertQuery, self).__init__(model_class)
@@ -1602,7 +1604,7 @@ class Database(object):
         qc = self.compiler()
         if not isinstance(fields, (list, tuple)):
             raise ValueError('fields passed to "create_index" must be a list or tuple: "%s"' % fields)
-        field_objs = [model_class._meta.fields[f] if isinstance(f, basestring) else f for f in fields]
+        field_objs = [model_class._meta.fields[f] if isinstance(f, str) else f for f in fields]
         return self.execute_sql(qc.create_index(model_class, field_objs, unique))
 
     def create_foreign_key(self, model_class, field):
@@ -1814,7 +1816,7 @@ class ModelOptions(object):
         self.reverse_rel = {}
 
     def prepared(self):
-        for field in self.fields.values():
+        for field in list(self.fields.values()):
             if field.default is not None:
                 self.defaults[field] = field.default
 
@@ -1830,15 +1832,15 @@ class ModelOptions(object):
 
     def get_default_dict(self):
         dd = {}
-        for field, default in self.defaults.items():
-            if callable(default):
+        for field, default in list(self.defaults.items()):
+            if isinstance(default, collections.Callable):
                 dd[field.name] = default()
             else:
                 dd[field.name] = default
         return dd
 
     def get_sorted_fields(self):
-        return sorted(self.fields.items(), key=lambda (k,v): (v is self.primary_key and 1 or 2, v._order))
+        return sorted(list(self.fields.items()), key=lambda k_v: (k_v[1] is self.primary_key and 1 or 2, k_v[1]._order))
 
     def get_field_names(self):
         return [f[0] for f in self.get_sorted_fields()]
@@ -1869,7 +1871,7 @@ class BaseModel(type):
         meta_options = {}
         meta = attrs.pop('Meta', None)
         if meta:
-            meta_options.update((k, v) for k, v in meta.__dict__.items() if not k.startswith('_'))
+            meta_options.update((k, v) for k, v in list(meta.__dict__.items()) if not k.startswith('_'))
 
         # inherit any field descriptors by deep copying the underlying field obj
         # into the attrs of the new model, additionally see if the bases define
@@ -1879,11 +1881,11 @@ class BaseModel(type):
                 continue
 
             base_meta = getattr(b, '_meta')
-            for (k, v) in base_meta.__dict__.items():
+            for (k, v) in list(base_meta.__dict__.items()):
                 if k in cls.inheritable_options and k not in meta_options:
                     meta_options[k] = v
 
-            for (k, v) in b.__dict__.items():
+            for (k, v) in list(b.__dict__.items()):
                 if isinstance(v, FieldDescriptor) and k not in attrs:
                     if not v.field.primary_key:
                         attrs[k] = deepcopy(v.field)
@@ -1896,7 +1898,7 @@ class BaseModel(type):
         primary_key = None
 
         # replace the fields with field descriptors, calling the add_to_class hook
-        for name, attr in cls.__dict__.items():
+        for name, attr in list(cls.__dict__.items()):
             cls._meta.indexes = list(cls._meta.indexes)
             if isinstance(attr, Field):
                 attr.add_to_class(cls, name)
@@ -1924,14 +1926,12 @@ class BaseModel(type):
         return cls
 
 
-class Model(object):
-    __metaclass__ = BaseModel
-
+class Model(object, metaclass=BaseModel):
     def __init__(self, *args, **kwargs):
         self._data = self._meta.get_default_dict()
         self._obj_cache = {} # cache of related objects
 
-        for k, v in kwargs.items():
+        for k, v in list(kwargs.items()):
             setattr(self, k, v)
 
     @classmethod
@@ -1943,12 +1943,12 @@ class Model(object):
 
     @classmethod
     def update(cls, **update):
-        fdict = dict((cls._meta.fields[f], v) for f, v in update.items())
+        fdict = dict((cls._meta.fields[f], v) for f, v in list(update.items()))
         return UpdateQuery(cls, fdict)
 
     @classmethod
     def insert(cls, **insert):
-        fdict = dict((cls._meta.fields[f], v) for f, v in insert.items())
+        fdict = dict((cls._meta.fields[f], v) for f, v in list(insert.items()))
         return InsertQuery(cls, fdict)
 
     @classmethod
@@ -2002,7 +2002,7 @@ class Model(object):
 
         db.create_table(cls)
 
-        for field_name, field_obj in cls._meta.fields.items():
+        for field_name, field_obj in list(cls._meta.fields.items()):
             if isinstance(field_obj, ForeignKeyField):
                 db.create_foreign_key(cls, field_obj)
             elif field_obj.index or field_obj.unique:
@@ -2060,7 +2060,7 @@ class Model(object):
             if klass in seen:
                 continue
             seen.add(klass)
-            for rel_name, fk in klass._meta.reverse_rel.items():
+            for rel_name, fk in list(klass._meta.reverse_rel.items()):
                 rel_model = fk.model_class
                 expr = fk << query
                 if not fk.null or search_nullable:
@@ -2103,7 +2103,7 @@ def sort_models_topologically(models):
     def dfs(model):
         if model in models and model not in seen:
             seen.add(model)
-            for foreign_key in model._meta.reverse_rel.values():
+            for foreign_key in list(model._meta.reverse_rel.values()):
                 dfs(foreign_key.model_class)
             ordering.append(model)  # parent will follow descendants
     # order models by name and table initially to guarantee a total ordering
